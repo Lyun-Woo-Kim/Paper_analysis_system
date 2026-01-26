@@ -12,7 +12,7 @@ from surya.settings import settings
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.join(current_dir, '..')
 sys.path.insert(0, root_dir)
-from utils.utils import save_to_jsonl
+from utils.utils import save_to_json
 
 class SuryaLayoutExtractor:
     def __init__(self, output_dir="assets_visual"):
@@ -144,5 +144,5 @@ class SuryaLayoutExtractor:
                     'bbox': img_box
                 }
                 
-                save_to_jsonl(save_file, filename=f"{self.output_dir}/p{page_idx}_{label}_{i}.jsonl")
+                save_to_json(save_file, filename=f"{self.output_dir}/p{page_idx}_{label}_{i}.json")
                 

@@ -1,6 +1,7 @@
 from pathlib import Path
 import yaml
 import json
+import re
 
 def load_config(path: str) -> dict:
     config_path = Path(path)
@@ -22,13 +23,28 @@ def load_from_jsonl(filename):
     with open(filename, 'r', encoding='utf-8') as f:
         return [json.loads(line) for line in f]
     
+def save_to_json(data, filename):
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        
+def load_from_json(filename):
+    with open(filename, 'r', encoding='utf-8') as f:
+        return json.load(f)
+    
+def delete_think_tag(text: str): 
+    return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    
+def parse_json_output(text: str):
+    # <think> 태그 제거 후 JSON 파싱
+    clean_text = delete_think_tag(text)
+    return json.loads(clean_text)
+
+# 아래는 이미지 상세 분석을 위한 프롬프트 관련 함수
 def normalize_label(label: str) -> str:
     if not label:
         return ""
     return str(label).strip().lower()
     
-    
-# 아래는 이미지 상세 분석을 위한 프롬프트 관련 함수수
 def build_prompt_table(caption: str) -> str:
     return f"""
 Use caption as a hint, but prioritize what is actually visible in the image.

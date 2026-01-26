@@ -6,11 +6,9 @@ Your task is to identify and extract ALL mathematical formulas (equations) from 
 
 [CRITICAL RULE]
 - First, check if any mathematical formulas exist in the image.
-- If NO formulas are present, return EXACTLY: {{"page_index": {page_index}, "formulas": []}}
+- If NO formulas are present, return EXACTLY: {{"formulas": []}}
 - If formulas exist, extract them according to the following JSON schema:
-
 {{
-  "page_index": {page_index},
   "formulas": [
     {{
       "latex": "LaTeX string",         // Use \\frac, \\sum, \\begin{{aligned}}, etc.
@@ -30,6 +28,37 @@ Your task is to identify and extract ALL mathematical formulas (equations) from 
 Caption for Context: {caption}
 """
 
+VL_FORMULA_FIX_PROMPT = r"""
+You are an expert in OCR and mathematical document analysis.
+Your task is to identify and extract ALL mathematical formulas (equations) from the provided image.
+
+Return ONLY a single JSON object (no markdown, no explanations, no extra text).
+
+[CRITICAL RULE]
+- First, check if any mathematical formulas exist in the image.
+- If NO formulas are present, return EXACTLY: {{"formulas": []}}
+
+JSON schema:
+{{
+  "formulas": [
+    {{
+      "latex": "LaTeX string",
+      "tag": "normalized tag/null",
+      "tag_raw": "raw tag/null",
+      "bbox": [x0, y0, x1, y1],
+      "confidence": 0.0
+    }}
+  ]
+}}
+```
+[Rules]
+1) Extract ONLY equations (no plain text/captions).
+2) The "latex" must be a valid LaTeX expression.
+3) Use pixel coordinates for bbox.
+
+Caption for Context: {caption}
+"""
+
 import fitz  # PyMuPDF
 import io
 import os
@@ -40,13 +69,13 @@ from PIL import Image
 from tqdm import tqdm
 
 class MathExtractor:
-    def __init__(self, out_dir="assets_visual", config_path = 'model_config.yaml'):
+    def __init__(self, out_dir="assets_visual", config_path = 'configs.yaml'):
         self.configs = load_config(config_path)
         self.url = f"http://{self.configs['VL_HOST']}:{self.configs['VL_PORT']}/analyze"
         self.out_dir = out_dir
         os.makedirs(self.out_dir, exist_ok=True)
 
-    def _pdf_page_to_base64(self, page, scale=2.0):
+    def _pdf_page_to_base64(self, page, scale=3.0):
         """페이지를 고해상도(2x2) 이미지로 변환 후 Base64 인코딩"""
         # 해상도를 scale배만큼 높임 (Matrix(2, 2)는 가로세로 2배씩 확대)
         mat = fitz.Matrix(scale, scale)
@@ -69,20 +98,20 @@ class MathExtractor:
 
         for page_idx in tqdm(range(len(doc)), desc = f"Extracting formulas from {pdf_path}"):
             page = doc[page_idx]
-            # 1. 고해상도 이미지 생성 (Base64)
+            # 고해상도 이미지 생성 (글자가 더 잘 보이도록)
             base64_img = self._pdf_page_to_base64(page, scale=2.0)
 
-            # 2. 기존 분석 데이터(Caption 등)가 있다면 로드
+            # 기존 분석 데이터(Caption 등)가 있다면 로드
             # (Surya Layout 결과물 등이 out_dir에 저장되어 있다고 가정)
             caption = self._load_caption(page_idx)
 
-            # 3. 프롬프트 구성
+            # 프롬프트 구성
             current_prompt = VL_FORMULA_PROMPT.format(
                 page_index=page_idx, 
                 caption=caption
             )
 
-            # 4. Flask 서버에 요청 전송
+            # Flask 서버에 요청 전송
             payload = {
                 "messages": [
                     {
@@ -102,11 +131,42 @@ class MathExtractor:
                 
                 # 결과 파싱 (정규식 등으로 JSON만 추출하는 로직 권장)
                 extracted_json = self._parse_json(data.get("response", ""))
+                extracted_json['page_index'] = page_idx
+                extracted_json['status'] = 'success'
                 results.append(extracted_json)
                 
             except Exception as e:
-                print(f"      ! Error on page {page_idx}: {e}")
-                results.append({"page_index": page_idx, "formulas": [], "error": str(e)})
+                try: 
+                    current_prompt = VL_FORMULA_FIX_PROMPT.format(
+                        page_index=page_idx, 
+                        caption=caption
+                    )
+                    payload = {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "image", "image": f"data:image/png;base64,{base64_img}"},
+                                    {"type": "text", "text": current_prompt}
+                                ]
+                            }
+                        ]
+                    }
+                    response = requests.post(self.url, json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    extracted_json = self._parse_json(data.get("response", ""))
+                    extracted_json['page_index'] = page_idx
+                    extracted_json['status'] = 'success'
+                    results.append(extracted_json)
+                except Exception as e:
+                    extracted_json['status'] = 'error'
+                    extracted_json['page_index'] = page_idx
+                    extracted_json['formulas'] = []
+                    extracted_json['error'] = str(e)
+                    results.append(extracted_json)
+                    print(f"      ! Error on page {page_idx}: {e}")
+                
         with open(os.path.join(self.out_dir, "formula_analysis.json"), "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
 
@@ -120,8 +180,10 @@ class MathExtractor:
     def _parse_json(self, text):
         """모델 응답에서 JSON 데이터 추출"""
         try:
-            # ```json ... ``` 블록 제거
-            clean_text = text.split("```json")[-1].split("```")[0].strip()
-            return json.loads(clean_text)
+            if "```json" in text:
+                clean_text = text.split("```json")[-1].split("```")[0].strip()
+                return json.loads(clean_text)
+            else:
+                return json.loads(text)
         except:
             return {"raw_text": text, "status": "parse_error"}

@@ -94,10 +94,16 @@ class QwenEngine:
         ).to("cuda")
 
         # 3. 추론 (Inference)
+        ## 약간의 창의성 부여를 위해 temperature, top_p 조율.
+        ## 재현성이 중요하다면 do_sample = False, seed = 42 추가 / temperature, top_p 제거 요망.
         with torch.no_grad():
             generated_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=1024  # 논문 분석이므로 길이를 넉넉하게
+                max_new_tokens=1024,
+                temperature = 0.4,
+                top_p = 0.8
+                # do_sample = False, 
+                # seed = 42
             )
 
         # 4. 결과 디코딩
